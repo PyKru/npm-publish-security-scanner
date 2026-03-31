@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "🔐 Running pre-commit security scan..."
+node scripts/scan-secrets.js
+node scripts/scan-sourcemaps.js

@@ -1,0 +1,38 @@
+# Source & dev files — NEVER publish these
+src/
+tests/
+__tests__/
+coverage/
+.github/
+.husky/
+docs/
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
+
+# Config files
+.env*
+.eslintrc*
+.prettierrc*
+jest.config.*
+tsconfig*.json
+.babelrc*
+.editorconfig
+.gitignore
+.gitattributes
+.npmignore
+
+# Build artifacts that should NOT be in the tarball
+*.map
+*.d.ts.map
+
+# Secrets & credentials (belt-and-suspenders)
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+.sentryclirc
+aws-exports.js

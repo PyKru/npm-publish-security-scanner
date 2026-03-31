@@ -1,0 +1,11 @@
+- name: Run npm publish security plugin
+  uses: ./.github/actions/npm-publish-security-scan
+  with:
+    node-version: '20'
+    install-command: 'npm ci --ignore-scripts'
+    build-command: 'npm run build --if-present'
+    audit-level: 'high'
+    allowed-map-files: ''
+    max-file-mb: '5'
+    max-total-mb: '50'
+    upload-artifact: 'true'

@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "description": "Custom secret patterns for your organization. Add company-specific tokens here.",
+  "patterns": [
+    {
+      "name": "Company Internal API Token",
+      "regex": "MYCO_[A-Z0-9]{32}",
+      "severity": "HIGH",
+      "description": "Internal API tokens for MYCO services"
+    },
+    {
+      "name": "Internal Service Account",
+      "regex": "svc-[a-z]+-[A-Za-z0-9]{24}",
+      "severity": "HIGH",
+      "description": "Service account credentials"
+    }
+  ]
+}
