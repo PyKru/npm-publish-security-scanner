@@ -8,13 +8,13 @@ on:
       publish:
         description: 'Publish to npm after passing all checks?'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 permissions:
   contents: read
-  security-events: write   # for SARIF upload
-  id-token: write          # for npm trusted publishing (OIDC)
+  security-events: write
+  id-token: write
 
 jobs:
   security-scan:
@@ -26,89 +26,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history for secret scanning
+          fetch-depth: 0
+
+      - name: Run composite security action
+        id: security
+        uses: ./.github/actions/npm-publish-security-scan
+        with:
+          node-version: '20'
+          install-command: 'npm ci --ignore-scripts'
+          build-command: 'npm run build --if-present'
+          audit-level: 'high'
+          allowed-map-files: ''
+          max-file-mb: '5'
+          max-total-mb: '50'
+          upload-artifact: 'true'
+
+      - name: Fail if security scan failed
+        if: ${{ steps.security.outputs.overall != 'PASS' }}
+        run: |
+          echo "::error::Security scan failed."
+          exit 1
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts  # --ignore-scripts prevents malicious postinstall
+        run: npm ci --ignore-scripts
 
-      - name: Build project
+      - name: Build
         run: npm run build --if-present
 
-      # ── 1. Sourcemap Leak Scan ─────────────────────────────────────────────
-      - name: 🗺 Scan for sourcemap leaks
-        id: sourcemap_scan
-        run: node scripts/scan-sourcemaps.js
-
-      # ── 2. Secret Scan ────────────────────────────────────────────────────
-      - name: 🔐 Scan for secrets and credentials
-        id: secret_scan
-        env:
-          ALLOWED_MAP_FILES: ''   # comma-separated allowed .map filenames
-        run: node scripts/scan-secrets.js
-
-      # ── 3. Unintended Files Scan ──────────────────────────────────────────
-      - name: 📦 Scan for unintended publish files
-        id: files_scan
-        env:
-          MAX_FILE_MB: '5'
-          MAX_TOTAL_MB: '50'
-        run: node scripts/scan-unintended-files.js
-
-      # ── 4. Dependency Scan ────────────────────────────────────────────────
-      - name: 🔍 Scan dependencies (audit + typosquat)
-        id: dep_scan
-        env:
-          AUDIT_LEVEL: high
-        run: node scripts/scan-dependencies.js
-
-      # ── 5. Gitleaks (deep secret history scan) ────────────────────────────
-      - name: 🕵️ Gitleaks — scan commit history
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # optional for SARIF upload
-
-      # ── 6. OSSAR / CodeQL Supply Chain ────────────────────────────────────
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-          queries: security-extended
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: '/language:javascript-typescript'
-
-      # ── 7. Aggregate report ────────────────────────────────────────────────
-      - name: 📊 Generate consolidated report
-        if: always()
-        run: node scripts/run-all-scans.js
-        continue-on-error: false
-
-      - name: Upload security report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-security-report-${{ github.run_id }}
-          path: npm-security-report.json
-          retention-days: 90
-
-      # ── 8. Trusted npm Publish (OIDC — no tokens stored) ──────────────────
-      - name: Configure npm trusted publishing
-        if: ${{ github.event.inputs.publish == 'true' && success() }}
-        run: |
-          npm config set //registry.npmjs.org/:_authToken=""
-          # Trusted publishing uses OIDC — no NPM_TOKEN secret needed
-
-      - name: 🚀 Publish to npm (only if ALL scans pass)
-        if: ${{ github.event.inputs.publish == 'true' && success() }}
+      - name: Publish with provenance
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
