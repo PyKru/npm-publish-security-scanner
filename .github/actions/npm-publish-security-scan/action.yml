@@ -1,11 +1,132 @@
-- name: Run npm publish security plugin
-  uses: ./.github/actions/npm-publish-security-scan
-  with:
-    node-version: '20'
-    install-command: 'npm ci --ignore-scripts'
-    build-command: 'npm run build --if-present'
-    audit-level: 'high'
-    allowed-map-files: ''
-    max-file-mb: '5'
-    max-total-mb: '50'
-    upload-artifact: 'true'
+name: 'npm Publish Security Scan'
+description: 'Scan npm publish output for sourcemap leaks, secrets, unintended files, and dependency risk before publish'
+author: 'krutikjs@gmail.com'
+
+inputs:
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '20'
+
+  install-command:
+    description: 'Dependency install command'
+    required: false
+    default: 'npm ci --ignore-scripts'
+
+  build-command:
+    description: 'Build command to prepare publish artifacts'
+    required: false
+    default: 'npm run build --if-present'
+
+  audit-level:
+    description: 'npm audit minimum severity threshold'
+    required: false
+    default: 'high'
+
+  allowed-map-files:
+    description: 'Comma-separated sourcemap filenames allowed in package'
+    required: false
+    default: ''
+
+  max-file-mb:
+    description: 'Maximum allowed individual file size in published tarball'
+    required: false
+    default: '5'
+
+  max-total-mb:
+    description: 'Maximum allowed total package size in MB'
+    required: false
+    default: '50'
+
+  working-directory:
+    description: 'Directory containing package.json to scan'
+    required: false
+    default: '.'
+
+  upload-artifact:
+    description: 'Upload the generated JSON report as a workflow artifact'
+    required: false
+    default: 'true'
+
+outputs:
+  overall:
+    description: 'Overall PASS or FAIL result'
+    value: ${{ steps.report.outputs.overall }}
+
+  report-file:
+    description: 'Path to the generated JSON report'
+    value: ${{ steps.report.outputs.report-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+        cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+    - name: Verify project files
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        test -f package.json || { echo "::error::package.json not found in $PWD"; exit 1; }
+        test -f scripts/run-all-scans.js || { echo "::error::scripts/run-all-scans.js not found in $PWD"; exit 1; }
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        ${{ inputs.install-command }}
+
+    - name: Build package
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        ${{ inputs.build-command }}
+
+    - name: Run security scans
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AUDIT_LEVEL: ${{ inputs.audit-level }}
+        ALLOWED_MAP_FILES: ${{ inputs.allowed-map-files }}
+        MAX_FILE_MB: ${{ inputs.max-file-mb }}
+        MAX_TOTAL_MB: ${{ inputs.max-total-mb }}
+      run: |
+        set -euo pipefail
+        node scripts/run-all-scans.js
+
+    - name: Read report outputs
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        test -f npm-security-report.json || { echo "::error::npm-security-report.json not found"; exit 1; }
+        overall="$(node -p "require('./npm-security-report.json').overall")"
+        echo "overall=$overall" >> "$GITHUB_OUTPUT"
+        echo "report-file=${{ inputs.working-directory }}/npm-security-report.json" >> "$GITHUB_OUTPUT"
+
+    - name: Add job summary
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        overall="$(node -p "require('./npm-security-report.json').overall")"
+        echo "## npm Publish Security Scan" >> "$GITHUB_STEP_SUMMARY"
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Overall: **$overall**" >> "$GITHUB_STEP_SUMMARY"
+        echo "- Report: \`${{ inputs.working-directory }}/npm-security-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload security report
+      if: ${{ inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: npm-security-report-${{ github.run_id }}
+        path: ${{ inputs.working-directory }}/npm-security-report.json
+        retention-days: 30
