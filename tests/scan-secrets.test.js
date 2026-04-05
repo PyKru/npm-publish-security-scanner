@@ -1,45 +1,147 @@
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync, spawnSync } = require('child_process');
 
-describe('scan-secrets.js', () => {
+function writeJson(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+function copyScanner(tmpDir, sourcePath) {
+  const target = path.join(tmpDir, 'scripts', path.basename(sourcePath));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(sourcePath, target);
+  return target;
+}
+
+function createPackageJson(tmpDir) {
+  writeJson(path.join(tmpDir, 'package.json'), {
+    name: 'fixture-pkg',
+    version: '1.0.0',
+    files: ['dist/', 'scripts/', 'rules/']
+  });
+}
+
+describe('scan-secrets policy enforcement', () => {
   let tmpDir;
+  let scannerPath;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-policy-'));
+    createPackageJson(tmpDir);
+    scannerPath = copyScanner(tmpDir, path.resolve('scripts/scan-secrets.js'));
+    fs.mkdirSync(path.join(tmpDir, 'dist'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'rules'), { recursive: true });
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test('should pass on a clean file', () => {
-    fs.writeFileSync(path.join(tmpDir, 'safe.js'), 'const x = 42;\nexport default x;');
-    expect(() => execSync(`node scripts/scan-secrets.js`, { cwd: process.cwd() })).not.toThrow();
+  test('loads custom patterns and blocks matching secrets', () => {
+    writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
+      version: '1.0',
+      patterns: [
+        {
+          name: 'Internal Token',
+          regex: 'MYCO_[A-Z0-9]{32}',
+          severity: 'HIGH'
+        }
+      ]
+    });
+
+    writeJson(path.join(tmpDir, 'rules', 'allowlist.json'), {
+      version: '1.1',
+      allowedSecretPatterns: [],
+      allowedMapFiles: [],
+      allowedFiles: []
+    });
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'dist', 'index.js'),
+      'const token = "MYCO_1234567890ABCDEF1234567890ABCD";\n'
+    );
+
+    const result = spawnSync(process.execPath, [scannerPath], { cwd: tmpDir, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain('Internal Token');
+
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'scan-secrets.report.json'), 'utf8'));
+    expect(report.findings.some((f) => f.pattern === 'Internal Token')).toBe(true);
   });
 
-  test('should detect AWS Access Key', () => {
-    fs.writeFileSync(path.join(tmpDir, 'leaked.js'), 'const key = "AKIAIOSFODNN7EXAMPLE";');
-    // Verify pattern fires
-    const content = fs.readFileSync(path.join(tmpDir, 'leaked.js'), 'utf8');
-    expect(/AKIA[0-9A-Z]{16}/.test(content)).toBe(true);
+  test('allowlist suppresses matching secret only in scoped file', () => {
+    writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
+      version: '1.0',
+      patterns: [
+        {
+          name: 'Internal Token',
+          regex: 'MYCO_[A-Z0-9]{32}',
+          severity: 'HIGH'
+        }
+      ]
+    });
+
+    writeJson(path.join(tmpDir, 'rules', 'allowlist.json'), {
+      version: '1.1',
+      allowedSecretPatterns: [
+        {
+          pattern: 'MYCO_1234567890ABCDEF1234567890ABCD',
+          path: 'README.md',
+          approvedBy: 'security-team',
+          reason: 'doc example',
+          expires: '2099-12-31'
+        }
+      ],
+      allowedMapFiles: [],
+      allowedFiles: []
+    });
+
+    fs.writeFileSync(path.join(tmpDir, 'README.md'), 'Example token MYCO_1234567890ABCDEF1234567890ABCD\n');
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'index.js'), 'const token = "MYCO_1234567890ABCDEF1234567890ABCD";\n');
+
+    const result = spawnSync(process.execPath, [scannerPath], { cwd: tmpDir, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'scan-secrets.report.json'), 'utf8'));
+    expect(report.findings.some((f) => f.file.endsWith('README.md'))).toBe(false);
+    expect(report.findings.some((f) => f.file.endsWith(path.join('dist', 'index.js')))).toBe(true);
   });
 
-  test('should detect GitHub token', () => {
-    const token = 'ghp_' + 'A'.repeat(36);
-    expect(/ghp_[A-Za-z0-9]{36}/.test(token)).toBe(true);
-  });
+  test('expired allowlist entries do not suppress findings', () => {
+    writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
+      version: '1.0',
+      patterns: [
+        {
+          name: 'Internal Token',
+          regex: 'MYCO_[A-Z0-9]{32}',
+          severity: 'HIGH'
+        }
+      ]
+    });
 
-  test('should detect high entropy strings', () => {
-    const highEntropy = '"' + 'aB3#kL9mNq2pXw5vZyR7uT1sE4cF6hD8' + '"';
-    // Shannon entropy check
-    const str = highEntropy.slice(1, -1);
-    const freq = {};
-    for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
-    const entropy = Object.values(freq).reduce((acc, n) => {
-      const p = n / str.length; return acc - p * Math.log2(p);
-    }, 0);
-    expect(entropy).toBeGreaterThan(4.0);
+    writeJson(path.join(tmpDir, 'rules', 'allowlist.json'), {
+      version: '1.1',
+      allowedSecretPatterns: [
+        {
+          pattern: 'MYCO_1234567890ABCDEF1234567890ABCD',
+          path: 'dist/index.js',
+          approvedBy: 'security-team',
+          reason: 'expired exception',
+          expires: '2020-01-01'
+        }
+      ],
+      allowedMapFiles: [],
+      allowedFiles: []
+    });
+
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'index.js'), 'const token = "MYCO_1234567890ABCDEF1234567890ABCD";\n');
+
+    const result = spawnSync(process.execPath, [scannerPath], { cwd: tmpDir, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+
+    const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'scan-secrets.report.json'), 'utf8'));
+    expect(report.findings.some((f) => f.pattern === 'Internal Token')).toBe(true);
   });
 });
