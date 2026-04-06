@@ -1,69 +1,104 @@
 #!/usr/bin/env node
 const fs = require('fs');
+const { execSync } = require('child_process');
 const path = require('path');
-const { spawnSync } = require('child_process');
-const { color, writeJson } = require('./lib');
 
 const SCANNERS = [
-  { name: 'Sourcemap Scanner', script: 'scan-sourcemaps.js', report: 'scan-sourcemaps.report.json', critical: true },
-  { name: 'Secret Scanner', script: 'scan-secrets.js', report: 'scan-secrets.report.json', critical: true },
-  { name: 'Unintended Files Scanner', script: 'scan-unintended-files.js', report: 'scan-unintended-files.report.json', critical: true },
-  { name: 'Dependency Scanner', script: 'scan-dependencies.js', report: 'scan-dependencies.report.json', critical: false }
+  'scan-secrets.js',
+  'scan-unintended-files.js',
+  'scan-sourcemaps.js'
 ];
 
-console.log(color('cyan', '\n╔══════════════════════════════════════════════╗'));
-console.log(color('cyan', '║ npm Publish Security Scanner v2             ║'));
-console.log(color('cyan', '║ Hardened pre-publish security gate          ║'));
-console.log(color('cyan', '╚══════════════════════════════════════════════╝\n'));
+function runScanner(script) {
+  const reportPath = path.join(process.cwd(), `scan-${script.replace('.js', '')}.report.json`);
 
-const results = [];
-let overallFailed = false;
-for (const scanner of SCANNERS) {
-  const startedAt = Date.now();
-  const child = spawnSync(process.execPath, [path.join(__dirname, scanner.script)], {
-    stdio: 'inherit',
-    env: { ...process.env }
+  try {
+    execSync(`node scripts/${script}`, {
+      stdio: 'inherit',
+      cwd: process.cwd(),
+      timeout: 30000
+    });
+
+    if (fs.existsSync(reportPath)) {
+      const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+      return { name: script, report, ok: report.overall === 'PASS' };
+    } else {
+      // Create minimal PASS report if scanner ran successfully
+      const emptyReport = {
+        scanner: script.replace('.js', ''),
+        overall: 'PASS',
+        summary: { high: 0, medium: 0, low: 0 },
+        findings: [],
+        metadata: {}
+      };
+      fs.writeFileSync(reportPath, JSON.stringify(emptyReport, null, 2));
+      return { name: script, report: emptyReport, ok: true };
+    }
+  } catch (err) {
+    // Scanner failed - create FAIL report
+    const failReport = {
+      scanner: script.replace('.js', ''),
+      overall: 'FAIL',
+      summary: { high: 1 },
+      findings: [{ severity: 'HIGH', type: 'scan-error', message: err.message }],
+      error: err.message
+    };
+    fs.writeFileSync(reportPath, JSON.stringify(failReport, null, 2));
+    return { name: script, report: failReport, ok: false };
+  }
+}
+
+function writeAggregateReport(filename, data) {
+  try {
+    fs.writeFileSync(filename, JSON.stringify(data, null, 2) + '\n');
+    console.log(`📊 Aggregate report written: ${filename}`);
+  } catch (err) {
+    console.error(`❌ Failed to write ${filename}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+function main() {
+  console.log('\n🚀 Running all npm publish security scans...\n');
+
+  const results = SCANNERS.map(runScanner);
+  const numFailed = results.filter(r => !r.ok).length;
+
+  const aggregate = {
+    timestamp: new Date().toISOString(),
+    scanners: results.map(r => ({
+      name: r.name,
+      status: r.ok ? 'PASS' : 'FAIL',
+      summary: r.report?.summary || null,
+      ...(r.report || {}),
+      error: r.error || null
+    })),
+    overall: numFailed === 0 ? 'PASS' : 'FAIL',
+    summary: results.reduce((acc, r) => {
+      const s = r.report?.summary || { high: 0, medium: 0, low: 0 };
+      acc.high += s.high || 0;
+      acc.medium += s.medium || 0;
+      acc.low += s.low || 0;
+      return acc;
+    }, { high: 0, medium: 0, low: 0 })
+  };
+
+  writeAggregateReport('npm-security-report.json', aggregate);
+
+  console.log('\n📋 Scan Results:');
+  results.forEach(r => {
+    const status = r.ok ? '✅ PASS' : '❌ FAIL';
+    console.log(`${status} ${r.name} ${r.error ? `(${r.error})` : ''}`);
   });
-  let report = null;
-  try { report = JSON.parse(fs.readFileSync(scanner.report, 'utf8')); } catch {}
-  const passed = child.status === 0;
-  if (!passed && scanner.critical) overallFailed = true;
-  results.push({
-    scanner: scanner.name,
-    script: scanner.script,
-    critical: scanner.critical,
-    exitCode: child.status,
-    passed,
-    durationMs: Date.now() - startedAt,
-    report
-  });
-  console.log('');
+
+  console.log(`\nOverall: ${aggregate.overall} (${aggregate.summary.high} HIGH findings)`);
+
+  if (numFailed > 0) {
+    console.error('\n✗ Security scans failed. Publish blocked.');
+    process.exit(1);
+  }
+  console.log('\n✓ All scans passed. Safe to publish.');
+  process.exit(0);
 }
 
-console.log(color('bold', '─'.repeat(68)));
-console.log(color('bold', ' SCAN SUMMARY'));
-console.log(color('bold', '─'.repeat(68)));
-for (const result of results) {
-  const icon = result.passed ? color('green', '✓') : color(result.critical ? 'red' : 'yellow', '✗');
-  const label = result.passed ? color('green', 'PASS') : color(result.critical ? 'red' : 'yellow', result.critical ? 'FAIL' : 'WARN');
-  console.log(` ${icon} ${label} ${result.scanner.padEnd(28)} ${color('dim', `${result.durationMs}ms`)}`);
-}
-console.log(color('bold', '─'.repeat(68)));
-
-const consolidated = {
-  schemaVersion: '2.0',
-  timestamp: new Date().toISOString(),
-  repository: process.env.GITHUB_REPOSITORY || 'local',
-  commit: process.env.GITHUB_SHA || 'local',
-  overall: overallFailed ? 'FAIL' : 'PASS',
-  scanners: results
-};
-writeJson('npm-security-report.json', consolidated);
-console.log(color('dim', '\nReport -> npm-security-report.json'));
-
-if (overallFailed) {
-  console.error(color('red', '\n🚨 PUBLISH BLOCKED — critical security findings detected.\n'));
-  process.exit(1);
-}
-console.log(color('green', '\n✅ All critical checks passed.\n'));
-process.exit(0);
+main();

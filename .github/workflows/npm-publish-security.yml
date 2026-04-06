@@ -53,6 +53,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' }}
     permissions:
       contents: read
+      actions: read  # Added for composite action safety
       id-token: write
     steps:
       - name: Checkout

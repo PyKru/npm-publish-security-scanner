@@ -69,7 +69,8 @@ function normalizePath(p) {
 }
 
 function relPath(p, cwd = process.cwd()) {
-  return normalizePath(path.relative(cwd, path.resolve(cwd, p)));
+  return no
+  rmalizePath(path.relative(cwd, path.resolve(cwd, p)));
 }
 
 function readJson(file, fallback = null) {
@@ -175,27 +176,20 @@ function loadCustomSecretPatterns() {
 }
 
 function getPackedFiles() {
-  const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    shell: process.platform === 'win32'
-  });
-
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      error: (result.stderr || result.stdout || 'npm pack --dry-run failed').trim(),
-      files: [],
-      raw: null
-    };
-  }
-
   try {
-    const parsed = JSON.parse(result.stdout);
-    const pkg = Array.isArray(parsed) ? parsed[0] : parsed;
-    return { ok: true, files: Array.isArray(pkg?.files) ? pkg.files : [], raw: pkg };
-  } catch (error) {
-    return { ok: false, error: `Failed to parse npm pack output: ${error.message}`, files: [], raw: null };
+    const { execSync } = require('child_process');
+    const output = execSync('npm pack --dry-run --json', { encoding: 'utf8' });
+    const packs = JSON.parse(output);
+    if (!Array.isArray(packs) || packs.length === 0) throw new Error('Invalid npm pack output');
+    return {
+      ok: true,
+      files: packs[0].files.map(f => ({
+        path: path.normalize(f.path).replace(/\.\.\//g, ''),  // Block traversal
+        size: parseInt(f.size, 10) || 0
+      })).filter(f => path.isAbsolute(f.path) === false && f.path.indexOf('\0') === -1)  // No null bytes
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 }
 
@@ -258,13 +252,52 @@ function printFindings(findings) {
   }
 }
 
-function writeReport(reportFile, scanner, findings, extra = {}) {
-  const summary = summarizeFindings(findings);
-  const overall = summary.high > 0 ? 'FAIL' : 'PASS';
-  const report = { schemaVersion: '2.0', scanner, timestamp: isoNow(), overall, summary, findings, ...extra };
-  writeJson(reportFile, report);
+function writeReport(filename, scanner, findings, metadata = {}) {
+  const summary = findings.reduce((acc, f) => {
+    acc[f.severity.toLowerCase()] = (acc[f.severity.toLowerCase()] || 0) + 1;
+    return acc;
+  }, { high: 0, medium: 0, low: 0 });
+
+  const report = {
+    scanner,
+    timestamp: new Date().toISOString(),
+    overall: summary.high === 0 ? 'PASS' : 'FAIL',
+    summary,
+    findings,
+    metadata,
+    scannedAt: process.cwd()
+  };
+
+  // ALWAYS write, even PASS
+  fs.writeFileSync(filename, JSON.stringify(report, null, 2) + '\n');
+  console.log(`${color('cyan', `📄 Report written:`)} ${filename}`);
+
   return report;
 }
+
+function writeAggregateReport(filename, data) {
+  try {
+    fs.writeFileSync(filename, JSON.stringify(data, null, 2) + '\n');
+    return data;
+  } catch (err) {
+    console.error(color('red', `Failed to write aggregate report: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+// Updated relPath (cross-OS safe)
+function relPath(absPath) {
+  let rel = path.relative(process.cwd(), absPath);
+  rel = rel.replace(/^(\.\.(\/|\\)+)+/, '');  // Strip ../ chains
+  return rel.replace(/\\/g, '/');  // Normalize Windows paths
+}
+
+// Update exports (add these if not present)
+module.exports = {
+  // ... all existing exports like color, getPolicy, etc.
+  relPath,
+  writeAggregateReport
+};
 
 module.exports = {
   color,

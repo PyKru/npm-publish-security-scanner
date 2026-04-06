@@ -79,6 +79,7 @@ runs:
         set -euo pipefail
         test -f package.json || { echo "::error::package.json not found in $PWD"; exit 1; }
         test -f scripts/run-all-scans.js || { echo "::error::scripts/run-all-scans.js not found in $PWD"; exit 1; }
+        test -f scripts/scan-sourcemaps.js || { echo "::error::scripts/scan-sourcemaps.js not found in $PWD"; exit 1; }
         test -f scripts/lib.js || { echo "::error::scripts/lib.js not found in $PWD"; exit 1; }
 
     - name: Validate scanner syntax
@@ -103,6 +104,11 @@ runs:
       run: |
         set -euo pipefail
         ${{ inputs.build-command }}
+
+    - name: npm audit
+      shell: bash
+      run: |
+        npm audit --audit-level=${AUDIT_LEVEL} --json > npm-audit.json
 
     - name: Run security scans
       shell: bash
