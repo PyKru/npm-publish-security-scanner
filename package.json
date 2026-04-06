@@ -7,51 +7,24 @@
     "npm-publish-security-scan": "scripts/run-all-scans.js"
   },
   "files": [
-    "lib/",
+    "scripts/",
     "rules/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "action.yml"
   ],
   "scripts": {
+    "test": "node scripts/run-all-scans.js",
     "scan": "node scripts/run-all-scans.js",
     "scan:sourcemaps": "node scripts/scan-sourcemaps.js",
     "scan:secrets": "node scripts/scan-secrets.js",
     "scan:files": "node scripts/scan-unintended-files.js",
     "scan:deps": "node scripts/scan-dependencies.js",
-    "prepublishOnly": "npm run build && npm run scan",
-    "build": "tsc --project tsconfig.json",
-    "test": "jest",
-    "prepare": "is-ci || husky install",
-    "lint": "eslint src --ext .ts,.js",
-    "release": "npm run test && npm run scan && npm publish --provenance"
+    "build": "echo 'no build step required for scanner'",
+    "prepublishOnly": "npm run scan"
   },
-  "keywords": [
-    "security",
-    "npm",
-    "publish",
-    "scanner",
-    "sourcemap",
-    "secrets",
-    "ci",
-    "devsecops"
-  ],
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
-  },
-  "devDependencies": {
-    "@types/jest": "^29.5.14",
-    "eslint": "^9.22.0",
-    "globals": "^16.0.0",
-    "husky": "^9.1.7",
-    "is-ci": "^4.1.0",
-    "jest": "^29.7.0",
-    "typescript": "^5.8.3"
-  },
-  "lint-staged": {
-    "*.{js,ts}": [
-      "eslint --fix",
-      "node scripts/scan-secrets.js"
-    ]
   }
 }

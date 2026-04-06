@@ -4,11 +4,74 @@
   "allowedMapFiles": [],
   "allowedSecretPatterns": [
     {
-      "pattern": "EXAMPLE_PLACEHOLDER_TOKEN",
-      "reason": "Used only in documentation examples",
+      "pattern": "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "reason": "Scanner regex test patterns",
+      "path": "scripts/scan-secrets.js",
       "approvedBy": "security-team",
-      "expires": "2026-12-31"
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN (?:RSA )?PRIVATE KEY-----",
+      "reason": "Scanner regex test patterns",
+      "path": "scripts/scan-secrets.js",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN PRIVATE KEY-----",
+      "reason": "Scanner regex test patterns",
+      "path": "scripts/scan-secrets.js",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN EC PRIVATE KEY-----",
+      "reason": "Scanner regex test patterns",
+      "path": "scripts/scan-secrets.js",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+      "reason": "Scanner regex test patterns",
+      "path": "scripts/scan-secrets.js",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "reason": "Allowlist suppression for scanner patterns",
+      "path": "rules/allowlist.json",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN (?:RSA )?PRIVATE KEY-----",
+      "reason": "Allowlist suppression for scanner patterns",
+      "path": "rules/allowlist.json",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN PRIVATE KEY-----",
+      "reason": "Allowlist suppression for scanner patterns",
+      "path": "rules/allowlist.json",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN EC PRIVATE KEY-----",
+      "reason": "Allowlist suppression for scanner patterns",
+      "path": "rules/allowlist.json",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
+    },
+    {
+      "pattern": "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+      "reason": "Allowlist suppression for scanner patterns",
+      "path": "rules/allowlist.json",
+      "approvedBy": "security-team",
+      "expires": "2027-04-01"
     }
-  ],
-  "allowedFiles": []
+  ]
 }

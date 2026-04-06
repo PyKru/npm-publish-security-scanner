@@ -1,62 +1,103 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { color, getPolicy, getPackedFiles, makeFinding, printFindings, writeReport } = require('./lib');
 
-const COLORS = { red:'31', yellow:'33', green:'32', cyan:'36', bold:'1' };
-const c = (color, text) => `\x1b[${COLORS[color]}m${text}\x1b[0m`;
-
-function loadJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return {}; } }
-function normalize(p) { return p.replace(/\\/g, '/'); }
-
-const allowCfg = loadJson(path.join('rules', 'allowlist.json'));
 const REPORT_FILE = 'scan-sourcemaps.report.json';
-const allowedMapFiles = new Set([
-  ...(Array.isArray(allowCfg.allowedMapFiles) ? allowCfg.allowedMapFiles : []),
-  ...(process.env.ALLOWED_MAP_FILES || '').split(',').map(s => s.trim()).filter(Boolean)
-]);
-const distDirs = ['dist', 'build', 'lib', 'out', 'public'];
-const inlineSourcemapRx = /\/\/[#@]\s*sourceMappingURL=data:application\/json/;
-const externalMapRx = /\/\/[#@]\s*sourceMappingURL=(.+\.map)\s*$/m;
-const findings = [];
-let violations = 0;
+const SCANNER = 'sourcemap-scanner';
+const inlineRx = /[#@]\s*sourceMappingURL=data:application\/(?:json|octet-stream)/i;
+const externalRx = /[#@]\s*sourceMappingURL=([^\s]+)/g;
 
-function allowMap(file) { return allowedMapFiles.has(path.basename(file)); }
-function addFinding(file, reason) { findings.push({ file: normalize(file), reason, severity: 'HIGH' }); violations++; }
-function walk(dir) { if (!fs.existsSync(dir)) return []; return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]); }
+function main() {
+  console.log(color('bold', '\n🗺 Sourcemap Scanner v2\n'));
+  const { allowlist } = getPolicy();
+  const envAllowed = String(process.env.ALLOWED_MAP_FILES || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const allowedMapFiles = new Set([...(allowlist.allowedMapFiles || []), ...envAllowed].map((x) => path.basename(x)));
+  const packed = getPackedFiles();
+  const findings = [];
 
-function checkDir(dir) {
-  walk(dir).forEach(file => {
-    if (file.endsWith('.map')) {
-      if (allowMap(file)) return;
-      addFinding(file, '.map included in tarball');
-      return;
+  if (!packed.ok) {
+    findings.push(makeFinding({
+      scanner: SCANNER,
+      severity: 'HIGH',
+      type: 'pack-failure',
+      file: null,
+      message: 'npm pack --dry-run failed, unable to verify publish artifact sourcemaps',
+      evidence: packed.error
+    }));
+  } else {
+    console.log(color('cyan', `▶ Inspecting ${packed.files.length} packed file(s)`));
+    for (const file of packed.files) {
+      const rel = file.path;
+      const abs = path.resolve(process.cwd(), rel);
+      const base = path.basename(rel);
+      if (rel.endsWith('.map') && !allowedMapFiles.has(base)) {
+        findings.push(makeFinding({
+          scanner: SCANNER,
+          severity: 'HIGH',
+          type: 'map-file-in-package',
+          file: rel,
+          message: '.map file will be published in the npm tarball',
+          evidence: rel
+        }));
+        continue;
+      }
+      if (!/\.(js|mjs|cjs|css)$/.test(rel) || !fs.existsSync(abs)) continue;
+      let content = '';
+      try { content = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+      if (inlineRx.test(content)) {
+        findings.push(makeFinding({
+          scanner: SCANNER,
+          severity: 'HIGH',
+          type: 'inline-sourcemap',
+          file: rel,
+          message: 'Inline sourcemap reference detected in publish artifact',
+          evidence: 'sourceMappingURL=data:...'
+        }));
+      }
+      externalRx.lastIndex = 0;
+      let match;
+      while ((match = externalRx.exec(content)) !== null) {
+        const target = match[1].trim();
+        if (!target.endsWith('.map')) continue;
+        if (/^https?:\/\//i.test(target)) {
+          findings.push(makeFinding({
+            scanner: SCANNER,
+            severity: 'MEDIUM',
+            type: 'external-sourcemap-url',
+            file: rel,
+            message: 'External sourcemap URL referenced from published artifact',
+            evidence: target
+          }));
+          continue;
+        }
+        if (!allowedMapFiles.has(path.basename(target))) {
+          findings.push(makeFinding({
+            scanner: SCANNER,
+            severity: 'HIGH',
+            type: 'sourcemap-reference',
+            file: rel,
+            message: 'Published artifact references a sourcemap file',
+            evidence: target
+          }));
+        }
+      }
     }
-    if (/\.(js|mjs|cjs|css)$/.test(file)) {
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        if (inlineSourcemapRx.test(content)) addFinding(file, 'inline sourcemap reference');
-        const extMatch = content.match(externalMapRx);
-        if (extMatch && extMatch[1] && !extMatch[1].startsWith('http') && !allowMap(extMatch[1])) addFinding(file, `external sourcemap reference: ${extMatch[1]}`);
-      } catch (_) {}
-    }
+  }
+
+  const report = writeReport(REPORT_FILE, SCANNER, findings, {
+    allowedMapFiles: Array.from(allowedMapFiles).sort()
   });
+  printFindings(findings);
+  if (report.overall === 'PASS') {
+    console.log(color('green', '\n✓ No sourcemap leaks detected.\n'));
+    process.exit(0);
+  }
+  console.error(color('red', `\n✗ ${report.summary.high} HIGH severity sourcemap finding(s). Blocking publish.\n`));
+  process.exit(1);
 }
 
-function checkNpmPack() {
-  try {
-    const output = execSync('npm pack --dry-run --json 2>/dev/null', { encoding: 'utf8' });
-    const files = JSON.parse(output)[0]?.files?.map(f => f.path) || [];
-    files.forEach(f => {
-      if (f.endsWith('.map') && !allowMap(f)) addFinding(f, '.map included in tarball');
-    });
-  } catch (_) {}
-}
-
-console.log(c('bold', '\n🗺 Sourcemap Leak Scanner\n'));
-distDirs.forEach(checkDir);
-checkNpmPack();
-fs.writeFileSync(path.join(process.cwd(), REPORT_FILE), JSON.stringify({ timestamp: new Date().toISOString(), findings, summary: { violations, total: findings.length } }, null, 2));
-if (violations === 0) { console.log(c('green', '\n✓ No sourcemap leaks detected.\n')); process.exit(0); }
-console.error(c('red', `\n✗ ${violations} sourcemap violation(s). Blocking publish.\n`));
-process.exit(1);
+main();

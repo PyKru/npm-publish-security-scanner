@@ -1,68 +1,69 @@
 #!/usr/bin/env node
-const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-const c = (col, t) => `\x1b[${{red:'31',yellow:'33',green:'32',cyan:'36',bold:'1',dim:'2'}[col]}m${t}\x1b[0m`;
+const { spawnSync } = require('child_process');
+const { color, writeJson } = require('./lib');
 
 const SCANNERS = [
-  { name: 'Sourcemap Leak Scanner', script: 'scan-sourcemaps.js', report: 'scan-sourcemaps.report.json', critical: true },
+  { name: 'Sourcemap Scanner', script: 'scan-sourcemaps.js', report: 'scan-sourcemaps.report.json', critical: true },
   { name: 'Secret Scanner', script: 'scan-secrets.js', report: 'scan-secrets.report.json', critical: true },
   { name: 'Unintended Files Scanner', script: 'scan-unintended-files.js', report: 'scan-unintended-files.report.json', critical: true },
   { name: 'Dependency Scanner', script: 'scan-dependencies.js', report: 'scan-dependencies.report.json', critical: false }
 ];
 
-console.log(c('cyan', `
-╔══════════════════════════════════════════════════════════╗
-║     npm Publish Security Scanner  v1.1.0                ║
-║  Protecting releases from leaks, secrets & bloat        ║
-╚══════════════════════════════════════════════════════════╝
-`));
+console.log(color('cyan', '\n╔══════════════════════════════════════════════╗'));
+console.log(color('cyan', '║ npm Publish Security Scanner v2             ║'));
+console.log(color('cyan', '║ Hardened pre-publish security gate          ║'));
+console.log(color('cyan', '╚══════════════════════════════════════════════╝\n'));
 
 const results = [];
 let overallFailed = false;
-
-SCANNERS.forEach(({ name, script, report, critical }) => {
-  const start = Date.now();
-  const result = spawnSync(process.execPath, [path.join(__dirname, script)], {
+for (const scanner of SCANNERS) {
+  const startedAt = Date.now();
+  const child = spawnSync(process.execPath, [path.join(__dirname, scanner.script)], {
     stdio: 'inherit',
     env: { ...process.env }
   });
-  const passed = result.status === 0;
-  let reportData = {};
-  try {
-    reportData = JSON.parse(fs.readFileSync(report, 'utf8'));
-  } catch {}
-  results.push({ scanner: name, passed, duration: Date.now() - start, critical, report: reportData });
-  if (!passed && critical) overallFailed = true;
+  let report = null;
+  try { report = JSON.parse(fs.readFileSync(scanner.report, 'utf8')); } catch {}
+  const passed = child.status === 0;
+  if (!passed && scanner.critical) overallFailed = true;
+  results.push({
+    scanner: scanner.name,
+    script: scanner.script,
+    critical: scanner.critical,
+    exitCode: child.status,
+    passed,
+    durationMs: Date.now() - startedAt,
+    report
+  });
   console.log('');
-});
+}
 
-console.log(c('bold', '─'.repeat(60)));
-console.log(c('bold', ' SCAN SUMMARY'));
-console.log(c('bold', '─'.repeat(60)));
-results.forEach(({ scanner, passed, duration, critical }) => {
-  const icon = passed ? c('green', '✓') : c('red', '✗');
-  const label = passed ? c('green', 'PASS') : (critical ? c('red', 'FAIL') : c('yellow', 'WARN'));
-  console.log(`  ${icon}  ${label}  ${scanner.padEnd(34)} ${c('dim', duration + 'ms')}`);
-});
-console.log(c('bold', '─'.repeat(60)));
+console.log(color('bold', '─'.repeat(68)));
+console.log(color('bold', ' SCAN SUMMARY'));
+console.log(color('bold', '─'.repeat(68)));
+for (const result of results) {
+  const icon = result.passed ? color('green', '✓') : color(result.critical ? 'red' : 'yellow', '✗');
+  const label = result.passed ? color('green', 'PASS') : color(result.critical ? 'red' : 'yellow', result.critical ? 'FAIL' : 'WARN');
+  console.log(` ${icon} ${label} ${result.scanner.padEnd(28)} ${color('dim', `${result.durationMs}ms`)}`);
+}
+console.log(color('bold', '─'.repeat(68)));
 
-const report = {
+const consolidated = {
+  schemaVersion: '2.0',
   timestamp: new Date().toISOString(),
   repository: process.env.GITHUB_REPOSITORY || 'local',
-  commit: process.env.GITHUB_SHA ? process.env.GITHUB_SHA.slice(0, 7) : 'local',
+  commit: process.env.GITHUB_SHA || 'local',
   overall: overallFailed ? 'FAIL' : 'PASS',
   scanners: results
 };
-
-fs.writeFileSync('npm-security-report.json', JSON.stringify(report, null, 2));
-console.log(c('dim', '\n  Report → npm-security-report.json'));
+writeJson('npm-security-report.json', consolidated);
+console.log(color('dim', '\nReport -> npm-security-report.json'));
 
 if (overallFailed) {
-  console.error(c('red', c('bold', '\n🚨 PUBLISH BLOCKED — Critical security violations found.\n')));
+  console.error(color('red', '\n🚨 PUBLISH BLOCKED — critical security findings detected.\n'));
   process.exit(1);
 }
-
-console.log(c('green', c('bold', '\n✅ All critical checks passed. Safe to publish.\n')));
+console.log(color('green', '\n✅ All critical checks passed.\n'));
 process.exit(0);

@@ -36,7 +36,7 @@ inputs:
     required: false
     default: '.'
   upload-artifact:
-    description: 'Upload the generated JSON report as a workflow artifact'
+    description: 'Upload the generated JSON reports as workflow artifacts'
     required: false
     default: 'true'
 
@@ -72,13 +72,14 @@ runs:
         cache: npm
         cache-dependency-path: ${{ steps.lockfile.outputs.path }}
 
-    - name: Verify project files
+    - name: Verify scanner layout
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
         test -f package.json || { echo "::error::package.json not found in $PWD"; exit 1; }
         test -f scripts/run-all-scans.js || { echo "::error::scripts/run-all-scans.js not found in $PWD"; exit 1; }
+        test -f scripts/lib.js || { echo "::error::scripts/lib.js not found in $PWD"; exit 1; }
 
     - name: Validate scanner syntax
       shell: bash
@@ -137,10 +138,12 @@ runs:
         echo "- Overall: **$overall**" >> "$GITHUB_STEP_SUMMARY"
         echo "- Report: \`${{ inputs.working-directory }}/npm-security-report.json\`" >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Upload security report
+    - name: Upload security reports
       if: ${{ inputs.upload-artifact == 'true' }}
       uses: actions/upload-artifact@v4
       with:
         name: npm-security-report-${{ github.run_id }}
-        path: ${{ inputs.working-directory }}/npm-security-report.json
+        path: |
+          ${{ inputs.working-directory }}/npm-security-report.json
+          ${{ inputs.working-directory }}/scan-*.report.json
         retention-days: 30

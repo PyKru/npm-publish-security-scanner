@@ -2,7 +2,7 @@ name: npm Publish Security Gate
 
 on:
   push:
-    branches: [main, master, release/**]
+    branches: [ main, master, release/** ]
   workflow_dispatch:
     inputs:
       publish:
@@ -21,7 +21,6 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,11 +54,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
