@@ -3,9 +3,62 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const Ajv = require("ajv");
+
+const ajv = new Ajv({ allErrors: true, verbose: true });
 
 const COLORS = { red: '31', yellow: '33', green: '32', cyan: '36', bold: '1', dim: '2' };
 const SEVERITY_WEIGHT = { HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
+
+const ALLOWLIST_SCHEMA = {
+    "type": "object",
+    "required": ["version"],
+    "properties": {
+        "version": {"type": "string", "pattern": "^[0-9.]+$"},
+        "description": {"type": "string"},
+        "allowedMapFiles": {"type": "array", "items": {"type": "string"}},
+        "allowedSecretPatterns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["pattern", "reason", "approvedBy", "expires"],
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 10},
+                    "path": {"type": "string"},
+                    "line": {"type": "integer"},
+                    "approvedBy": {"type": "string", "minLength": 1},
+                    "expires": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
+                }
+            }
+        },
+        "allowedFiles": {"type": "array", "items": {"type": "string"}}
+    },
+    "additionalProperties": false
+};
+
+const CUSTOM_PATTERNS_SCHEMA = {
+    "type": "object",
+    "required": ["version"],
+    "properties": {
+        "version": {"type": "string", "pattern": "^[0-9.]+$"},
+        "description": {"type": "string"},
+        "patterns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "regex"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "regex": {"type": "string"},
+                    "flags": {"type": "string", "pattern": "^[gimyus]*$"},
+                    "severity": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]}
+                }
+            }
+        }
+    },
+    "additionalProperties": false
+};
 
 function color(name, text) {
   return `\x1b[${COLORS[name] || '0'}m${text}\x1b[0m`;
@@ -66,10 +119,37 @@ function isExpired(entry) {
   return Number.isFinite(t) && t < Date.now();
 }
 
+function validateAllowlist(data) {
+  const validate = ajv.compile(ALLOWLIST_SCHEMA);
+  const valid = validate(data);
+  if (!valid) {
+    const errors = validate.errors || [];
+    throw new Error(`Allowlist validation failed: ${errors.map(e => e.message).join("; ")}`);
+  }
+  return true;
+}
+
+function validateCustomPatterns(data) {
+  const validate = ajv.compile(CUSTOM_PATTERNS_SCHEMA);
+  const valid = validate(data);
+  if (!valid) {
+    const errors = validate.errors || [];
+    throw new Error(`Custom patterns validation failed: ${errors.map(e => e.message).join("; ")}`);
+  }
+  return true;
+}
+
 function getPolicy() {
-  const allow = readJson(path.join(process.cwd(), 'rules', 'allowlist.json'), {}) || {};
-  const custom = readJson(path.join(process.cwd(), 'rules', 'custom-patterns.json'), {}) || {};
-  return { allowlist: allow, customPatterns: custom };
+  const allowPath = path.join(process.cwd(), "rules", "allowlist.json");
+  const customPath = path.join(process.cwd(), "rules", "custom-patterns.json");
+
+  let allow = readJson(allowPath);
+  if (allow) validateAllowlist(allow);
+
+  let custom = readJson(customPath);
+  if (custom) validateCustomPatterns(custom);
+
+  return { allowlist: allow || {}, customPatterns: custom || {} };
 }
 
 function validateSeverity(value, fallback = 'HIGH') {
@@ -209,5 +289,7 @@ module.exports = {
   summarizeFindings,
   printFindings,
   writeReport,
-  SEVERITY_WEIGHT
+  SEVERITY_WEIGHT,
+  validateAllowlist,
+  validateCustomPatterns
 };
