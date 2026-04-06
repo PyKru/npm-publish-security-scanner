@@ -3,146 +3,143 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const colors = { red:'31', yellow:'33', green:'32', cyan:'36', bold:'1', dim:'2' };
-const c = (col, t) => `\x1b[${colors[col]}m${t}\x1b[0m`;
+const c = (col, t) => `\x1b[${{ red:'31', yellow:'33', green:'32', cyan:'36', bold:'1', dim:'2' }[col]}m${t}\x1b[0m`;
+const REPORT_FILE = 'scan-secrets.report.json';
 
-function readJsonIfExists(file, fallback) {
-  try {
-    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-const allowlist = readJsonIfExists(path.join(process.cwd(), 'rules', 'allowlist.json'), {
-  allowedSecretPatterns: []
-});
-
-const customPatternsFile = readJsonIfExists(path.join(process.cwd(), 'rules', 'custom-patterns.json'), {
-  patterns: []
-});
-
-const builtInPatterns = [
-  { name:'AWS Access Key', rx:/\bAKIA[0-9A-Z]{16}\b/, severity:'HIGH' },
-  { name:'GitHub Token (classic)', rx:/ghp_[A-Za-z0-9]{36}/, severity:'HIGH' },
-  { name:'GitHub Actions Token', rx:/ghs_[A-Za-z0-9]{36}/, severity:'HIGH' },
-  { name:'GitHub Fine-grained PAT', rx:/github_pat_[A-Za-z0-9_]{82}/, severity:'HIGH' },
-  { name:'npm Auth Token', rx:/\/\/registry\.npmjs\.org\/:_authToken\s*=\s*[A-Za-z0-9\-_\.]+/i, severity:'HIGH' },
-  { name:'npm Token', rx:/\bnpm_[A-Za-z0-9]{36}\b/, severity:'HIGH' },
-  { name:'Stripe Secret Key', rx:/sk_live_[0-9a-zA-Z]{24,}/, severity:'HIGH' },
-  { name:'OpenAI API Key', rx:/sk-[A-Za-z0-9]{48}/, severity:'HIGH' },
-  { name:'Google API Key', rx:/AIza[0-9A-Za-z\-_]{35}/, severity:'HIGH' },
-  { name:'RSA Private Key', rx:/-----BEGIN (?:RSA )?PRIVATE KEY-----/, severity:'HIGH' },
-  { name:'EC Private Key', rx:/-----BEGIN EC PRIVATE KEY-----/, severity:'HIGH' },
-  { name:'PGP Private Key', rx:/-----BEGIN PGP PRIVATE KEY BLOCK-----/, severity:'HIGH' },
-  { name:'JWT Token', rx:/eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_.+/=]+/, severity:'MEDIUM' },
-  { name:'.env file', rx:/^\.env(?:\.[a-z]+)?$/i, severity:'HIGH', filenameOnly:true }
+const BUILTIN_PATTERNS = [
+  { name: 'AWS Access Key', rx: /\bAKIA[0-9A-Z]{16}\b/g, severity: 'HIGH' },
+  { name: 'AWS Secret Key', rx: /aws[_\-\s]?secret[_\-\s]?key\s*[:=]\s*["']?[A-Za-z0-9\/+=]{40}/ig, severity: 'HIGH' },
+  { name: 'GitHub Token (classic)', rx: /ghp_[A-Za-z0-9]{36}/g, severity: 'HIGH' },
+  { name: 'GitHub Actions Token', rx: /ghs_[A-Za-z0-9]{36}/g, severity: 'HIGH' },
+  { name: 'GitHub Fine-grained PAT', rx: /github_pat_[A-Za-z0-9_]{82}/g, severity: 'HIGH' },
+  { name: 'npm Auth Token', rx: /\/\/registry\.npmjs\.org\/:_authToken\s*=\s*[A-Za-z0-9\-_\.]+/ig, severity: 'HIGH' },
+  { name: 'npm Token', rx: /\bnpm_[A-Za-z0-9]{36}\b/g, severity: 'HIGH' },
+  { name: 'Stripe Secret Key', rx: /sk_live_[0-9a-zA-Z]{24,}/g, severity: 'HIGH' },
+  { name: 'SendGrid API Key', rx: /SG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}/g, severity: 'HIGH' },
+  { name: 'Slack Bot Token', rx: /xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24}/g, severity: 'HIGH' },
+  { name: 'OpenAI API Key', rx: /sk-[A-Za-z0-9]{48}/g, severity: 'HIGH' },
+  { name: 'Google API Key', rx: /AIza[0-9A-Za-z\-_]{35}/g, severity: 'HIGH' },
+  { name: 'Google Service Account', rx: /"type"\s*:\s*"service_account"/g, severity: 'HIGH' },
+  { name: 'Firebase Config', rx: /apiKey\s*:\s*["'][A-Za-z0-9\-_]{39}["']/ig, severity: 'MEDIUM' },
+  { name: 'JWT Token', rx: /eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_.+\/=]+/g, severity: 'MEDIUM' },
+  { name: 'RSA Private Key', rx: /-----BEGIN (?:RSA )?PRIVATE KEY-----/g, severity: 'HIGH' },
+  { name: 'EC Private Key', rx: /-----BEGIN EC PRIVATE KEY-----/g, severity: 'HIGH' },
+  { name: 'PGP Private Key', rx: /-----BEGIN PGP PRIVATE KEY BLOCK-----/g, severity: 'HIGH' },
+  { name: 'Generic Password', rx: /(?:password|passwd|pwd|secret)\s*[:=]\s*["'][^"']{8,}["']/ig, severity: 'LOW' },
+  { name: 'Generic API Key', rx: /(?:api[_\-]?key|api[_\-]?secret)\s*[:=]\s*["'][A-Za-z0-9\-_\.]{16,}["']/ig, severity: 'LOW' },
+  { name: '.env file', rx: /^\.env(?:\.[a-z]+)?$/i, severity: 'HIGH', filenameOnly: true },
 ];
 
-const customPatterns = (customPatternsFile.patterns || [])
-  .filter((p) => p.name && p.regex && p.severity)
-  .map((p) => ({ name: p.name, rx: new RegExp(p.regex), severity: p.severity }));
-
-const SECRET_PATTERNS = [...builtInPatterns, ...customPatterns];
-const HIGH_ENTROPY_RX = /['"][A-Za-z0-9+/=!@#$%^&*_\-]{20,}['"]/g;
-const ENTROPY_THRESHOLD = 4.5;
-const SKIP_EXT = new Set(['.png','.jpg','.gif','.svg','.woff','.woff2','.ttf','.ico','.map']);
-const SKIP_DIR = new Set(['node_modules','.git','coverage','__tests__','fixtures']);
-
-let violations = 0;
-let lowCount = 0;
-const findings = [];
-
-function shannonEntropy(str) {
+function loadJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+}
+function normalize(p) { return path.relative(process.cwd(), p).replace(/\\/g, '/'); }
+function expired(entry) { return !!(entry?.expires && new Date(entry.expires) < new Date()); }
+function entropy(s) {
   const freq = {};
-  for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
-  return Object.values(freq).reduce((acc, n) => {
-    const p = n / str.length;
-    return acc - p * Math.log2(p);
-  }, 0);
+  for (const ch of s) freq[ch] = (freq[ch] || 0) + 1;
+  return Object.values(freq).reduce((a, n) => { const p = n / s.length; return a - p * Math.log2(p); }, 0);
 }
 
-function isAllowlisted(match, filePath) {
-  return (allowlist.allowedSecretPatterns || []).some((entry) => {
-    if (!entry.pattern) return false;
-    if (entry.expires && new Date(entry.expires) < new Date()) return false;
-    if (entry.path && filePath && !filePath.includes(entry.path)) return false;
-    return match.includes(entry.pattern);
+function buildCustomPatterns() {
+  const cfg = loadJson(path.join('rules', 'custom-patterns.json'));
+  if (!cfg?.patterns) return [];
+  return cfg.patterns.flatMap((p) => {
+    try { return [{ name: p.name, rx: new RegExp(p.regex, 'g'), severity: p.severity || 'HIGH' }]; }
+    catch (_) { return []; }
+  });
+}
+function buildAllowlist() {
+  const cfg = loadJson(path.join('rules', 'allowlist.json')) || {};
+  return Array.isArray(cfg.allowedSecretPatterns) ? cfg.allowedSecretPatterns : [];
+}
+function isAllowed(filePath, match, allowlist) {
+  const rel = normalize(filePath);
+  return allowlist.some((entry) => {
+    if (!entry?.pattern || expired(entry)) return false;
+    if (entry.pattern !== match) return false;
+    if (entry.path && entry.path.replace(/\\/g, '/') !== rel) return false;
+    return true;
   });
 }
 
-function recordFinding(file, line, pattern, severity, match) {
-  if (isAllowlisted(match, file)) return;
-  findings.push({ file, line, pattern, severity, match });
-  if (severity === 'HIGH' || severity === 'MEDIUM') violations += 1;
-  else lowCount += 1;
+const HIGH_ENTROPY_RX = /['\"][A-Za-z0-9+\/=!@#$%^&*\-_]{20,}['\"]/g;
+const ENTROPY_THRESHOLD = 4.5;
+const SKIP_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ttf', '.ico', '.map']);
+const SKIP_DIR = new Set(['node_modules', '.git', 'coverage', '__tests__', 'fixtures']);
+const SECRET_PATTERNS = [...BUILTIN_PATTERNS, ...buildCustomPatterns()];
+const SELF_SCAN_FILE = path.join('scripts', 'scan-secrets.js');
+const ALLOWLIST = buildAllowlist();
+const findings = [];
+let violations = 0;
+let lowCount = 0;
+
+function addFinding(filePath, line, pattern, severity, match) {
+  if (isAllowed(filePath, match, ALLOWLIST)) return;
+  findings.push({ file: normalize(filePath), line, pattern, severity, match });
+  if (severity === 'HIGH' || severity === 'MEDIUM') violations++;
+  else lowCount++;
 }
 
 function scanFile(filePath) {
-  const parts = filePath.split(path.sep);
+  const rel = normalize(filePath);
+  const parts = rel.split('/');
+  if (rel === SELF_SCAN_FILE) return;
   if (parts.some((p) => SKIP_DIR.has(p))) return;
-  if (SKIP_EXT.has(path.extname(filePath).toLowerCase())) return;
+  if (SKIP_EXT.has(path.extname(rel).toLowerCase())) return;
 
-  const basename = path.basename(filePath);
-  for (const pattern of SECRET_PATTERNS.filter((p) => p.filenameOnly)) {
-    if (pattern.rx.test(basename)) {
-      recordFinding(filePath, 0, pattern.name, pattern.severity, basename);
-    }
-  }
+  const basename = path.basename(rel);
+  SECRET_PATTERNS.filter((p) => p.filenameOnly).forEach((p) => {
+    if (p.rx.test(basename)) addFinding(filePath, 0, p.name, p.severity, basename);
+  });
 
   let content;
-  try {
-    content = fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return;
-  }
-
+  try { content = fs.readFileSync(filePath, 'utf8'); } catch (_) { return; }
   content.split('\n').forEach((line, i) => {
-    for (const pattern of SECRET_PATTERNS.filter((p) => !p.filenameOnly)) {
-      const match = line.match(pattern.rx);
-      if (match) recordFinding(filePath, i + 1, pattern.name, pattern.severity, match[0].slice(0, 100));
-    }
-
-    for (const candidate of line.match(HIGH_ENTROPY_RX) || []) {
-      const raw = candidate.slice(1, -1);
-      if (shannonEntropy(raw) > ENTROPY_THRESHOLD && !isAllowlisted(raw, filePath)) {
-        recordFinding(filePath, i + 1, 'High-Entropy String', 'MEDIUM', raw.slice(0, 100));
-      }
+    SECRET_PATTERNS.filter((p) => !p.filenameOnly).forEach((p) => {
+      p.rx.lastIndex = 0;
+      const m = line.match(p.rx);
+      if (m?.[0]) addFinding(filePath, i + 1, p.name, p.severity, m[0].slice(0, 200));
+    });
+    for (const cand of (line.match(HIGH_ENTROPY_RX) || [])) {
+      const raw = cand.slice(1, -1);
+      if (entropy(raw) > ENTROPY_THRESHOLD) addFinding(filePath, i + 1, 'High-Entropy String', 'MEDIUM', cand.slice(0, 200));
     }
   });
 }
 
 console.log(c('bold', '\n🔐 Secret Scanner\n'));
-
 let publishFiles = [];
 try {
-  const out = execSync('npm pack --dry-run --json', { encoding:'utf8', stdio:['ignore','pipe','ignore'] });
+  const out = execSync('npm pack --dry-run --json 2>/dev/null', { encoding: 'utf8' });
   publishFiles = JSON.parse(out)[0]?.files?.map((f) => f.path) || [];
-} catch {}
+} catch (_) {}
 
+const rootFiles = ['src', 'lib', 'dist', 'scripts', 'README.md'];
 if (publishFiles.length > 0) {
   console.log(c('cyan', `▶ Scanning ${publishFiles.length} npm tarball files...`));
-  publishFiles.forEach((f) => { if (fs.existsSync(f)) scanFile(f); });
+  publishFiles.forEach((f) => fs.existsSync(f) && scanFile(f));
 } else {
   console.log(c('cyan', '▶ Scanning project files...'));
-  ['src', 'lib', 'dist', 'scripts'].forEach((dir) => {
-    if (!fs.existsSync(dir)) return;
-    const walk = (d) => {
-      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-        const full = path.join(d, entry.name);
-        if (entry.isDirectory() && !SKIP_DIR.has(entry.name)) walk(full);
-        else scanFile(full);
+  rootFiles.forEach((entry) => {
+    if (!fs.existsSync(entry)) return;
+    const stat = fs.statSync(entry);
+    if (stat.isFile()) return scanFile(entry);
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).forEach((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIR.has(e.name)) walk(full);
+      } else {
+        scanFile(full);
       }
-    };
-    walk(dir);
+    });
+    walk(entry);
   });
 }
 
-fs.writeFileSync('scan-secrets.report.json', JSON.stringify({ findings }, null, 2));
-
-for (const sev of ['HIGH', 'MEDIUM', 'LOW']) {
+['HIGH', 'MEDIUM', 'LOW'].forEach((sev) => {
   const list = findings.filter((f) => f.severity === sev);
-  if (!list.length) continue;
+  if (!list.length) return;
   const col = sev === 'HIGH' ? 'red' : sev === 'MEDIUM' ? 'yellow' : 'dim';
   console.log(c(col, `\n[${sev}] ${list.length} finding(s):`));
   list.forEach((f) => {
@@ -150,12 +147,12 @@ for (const sev of ['HIGH', 'MEDIUM', 'LOW']) {
     console.log(`    File : ${f.file}${f.line ? ':' + f.line : ''}`);
     console.log(`    Match: ${c('dim', f.match)}`);
   });
-}
+});
 
+fs.writeFileSync(path.join(process.cwd(), REPORT_FILE), JSON.stringify({ timestamp: new Date().toISOString(), findings, summary: { violations, lowCount, total: findings.length } }, null, 2));
 if (violations === 0) {
   console.log(c('green', `\n✓ No secrets detected${lowCount ? ` (${lowCount} low-severity warning(s))` : ''}.\n`));
   process.exit(0);
 }
-
 console.error(c('red', `\n✗ ${violations} HIGH/MEDIUM secret(s) found. Blocking publish.\n`));
 process.exit(1);

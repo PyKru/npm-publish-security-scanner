@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 function writeJson(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -15,39 +15,32 @@ function copyScanner(tmpDir, sourcePath) {
   return target;
 }
 
-function createPackageJson(tmpDir) {
-  writeJson(path.join(tmpDir, 'package.json'), {
-    name: 'fixture-pkg',
-    version: '1.0.0',
-    files: ['dist/', 'scripts/', 'rules/']
-  });
-}
-
 describe('scan-secrets policy enforcement', () => {
   let tmpDir;
   let scannerPath;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-policy-'));
-    createPackageJson(tmpDir);
-    scannerPath = copyScanner(tmpDir, path.resolve('scripts/scan-secrets.js'));
     fs.mkdirSync(path.join(tmpDir, 'dist'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, 'rules'), { recursive: true });
+    scannerPath = copyScanner(tmpDir, path.resolve('scripts/scan-secrets.js'));
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test('loads custom patterns and blocks matching secrets', () => {
+  test('loads custom patterns and blocks matching secrets from published files', () => {
+    writeJson(path.join(tmpDir, 'package.json'), {
+      name: 'fixture-pkg',
+      version: '1.0.0',
+      files: ['dist/', 'rules/']
+    });
+
     writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
       version: '1.0',
       patterns: [
-        {
-          name: 'Internal Token',
-          regex: 'MYCO_[A-Z0-9]{32}',
-          severity: 'HIGH'
-        }
+        { name: 'Internal Token', regex: 'MYCO_[A-Z0-9]{32}', severity: 'HIGH' }
       ]
     });
 
@@ -58,10 +51,7 @@ describe('scan-secrets policy enforcement', () => {
       allowedFiles: []
     });
 
-    fs.writeFileSync(
-      path.join(tmpDir, 'dist', 'index.js'),
-      'const token = "MYCO_1234567890ABCDEF1234567890ABCD";\n'
-    );
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'index.js'), 'const token = "MYCO_1234567890ABCDEF1234567890ABCD";\n');
 
     const result = spawnSync(process.execPath, [scannerPath], { cwd: tmpDir, encoding: 'utf8' });
     expect(result.status).toBe(1);
@@ -71,15 +61,17 @@ describe('scan-secrets policy enforcement', () => {
     expect(report.findings.some((f) => f.pattern === 'Internal Token')).toBe(true);
   });
 
-  test('allowlist suppresses matching secret only in scoped file', () => {
+  test('allowlist suppresses matching secret only in scoped published file', () => {
+    writeJson(path.join(tmpDir, 'package.json'), {
+      name: 'fixture-pkg',
+      version: '1.0.0',
+      files: ['dist/', 'README.md', 'rules/']
+    });
+
     writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
       version: '1.0',
       patterns: [
-        {
-          name: 'Internal Token',
-          regex: 'MYCO_[A-Z0-9]{32}',
-          severity: 'HIGH'
-        }
+        { name: 'Internal Token', regex: 'MYCO_[A-Z0-9]{32}', severity: 'HIGH' }
       ]
     });
 
@@ -105,19 +97,21 @@ describe('scan-secrets policy enforcement', () => {
     expect(result.status).toBe(1);
 
     const report = JSON.parse(fs.readFileSync(path.join(tmpDir, 'scan-secrets.report.json'), 'utf8'));
-    expect(report.findings.some((f) => f.file.endsWith('README.md'))).toBe(false);
-    expect(report.findings.some((f) => f.file.endsWith(path.join('dist', 'index.js')))).toBe(true);
+    expect(report.findings.some((f) => f.file === 'README.md')).toBe(false);
+    expect(report.findings.some((f) => f.file === 'dist/index.js')).toBe(true);
   });
 
   test('expired allowlist entries do not suppress findings', () => {
+    writeJson(path.join(tmpDir, 'package.json'), {
+      name: 'fixture-pkg',
+      version: '1.0.0',
+      files: ['dist/', 'rules/']
+    });
+
     writeJson(path.join(tmpDir, 'rules', 'custom-patterns.json'), {
       version: '1.0',
       patterns: [
-        {
-          name: 'Internal Token',
-          regex: 'MYCO_[A-Z0-9]{32}',
-          severity: 'HIGH'
-        }
+        { name: 'Internal Token', regex: 'MYCO_[A-Z0-9]{32}', severity: 'HIGH' }
       ]
     });
 

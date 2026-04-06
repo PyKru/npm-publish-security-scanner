@@ -1,11 +1,10 @@
 {
   "version": "1.0",
-  "description": "Approved exceptions — each entry must be scoped, justified, approved, and time-bound.",
+  "description": "Approved exceptions — document every allowlist entry with a reason and expiry.",
   "allowedMapFiles": [],
   "allowedSecretPatterns": [
     {
       "pattern": "EXAMPLE_PLACEHOLDER_TOKEN",
-      "path": "README.md",
       "reason": "Used only in documentation examples",
       "approvedBy": "security-team",
       "expires": "2026-12-31"

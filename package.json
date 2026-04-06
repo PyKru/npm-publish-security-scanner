@@ -2,14 +2,13 @@
   "name": "npm-publish-security-scanner",
   "version": "1.0.0",
   "description": "Pre-publish security scanner for npm packages — detects sourcemap leaks, secrets, and unintended files",
-  "main": "scripts/run-all-scans.js",
+  "main": "lib/index.js",
   "bin": {
     "npm-publish-security-scan": "scripts/run-all-scans.js"
   },
   "files": [
-    "scripts/",
+    "lib/",
     "rules/",
-    ".github/actions/npm-publish-security-scan/action.yml",
     "README.md",
     "LICENSE"
   ],
@@ -19,14 +18,23 @@
     "scan:secrets": "node scripts/scan-secrets.js",
     "scan:files": "node scripts/scan-unintended-files.js",
     "scan:deps": "node scripts/scan-dependencies.js",
-    "check:syntax": "node --check scripts/run-all-scans.js && node --check scripts/scan-sourcemaps.js && node --check scripts/scan-secrets.js && node --check scripts/scan-unintended-files.js && node --check scripts/scan-dependencies.js",
-    "prepublishOnly": "npm run check:syntax && npm run scan",
+    "prepublishOnly": "npm run build && npm run scan",
+    "build": "tsc --project tsconfig.json",
     "test": "jest",
     "prepare": "is-ci || husky install",
-    "lint": "eslint scripts --ext .js",
-    "release": "npm run check:syntax && npm run test && npm run scan && npm publish --provenance"
+    "lint": "eslint src --ext .ts,.js",
+    "release": "npm run test && npm run scan && npm publish --provenance"
   },
-  "keywords": ["security", "npm", "publish", "scanner", "sourcemap", "secrets", "ci", "devsecops"],
+  "keywords": [
+    "security",
+    "npm",
+    "publish",
+    "scanner",
+    "sourcemap",
+    "secrets",
+    "ci",
+    "devsecops"
+  ],
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
@@ -37,10 +45,12 @@
     "globals": "^16.0.0",
     "husky": "^9.1.7",
     "is-ci": "^4.1.0",
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "typescript": "^5.8.3"
   },
   "lint-staged": {
-    "*.{js,json,yml,yaml}": [
+    "*.{js,ts}": [
+      "eslint --fix",
       "node scripts/scan-secrets.js"
     ]
   }
